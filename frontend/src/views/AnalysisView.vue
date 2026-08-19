@@ -27,6 +27,7 @@ const tabs: Array<{ key: Tab; label: string }> = [
 const active = ref<Tab>('device')
 const data = reactive<Record<string, any>>({})
 const loaded = reactive<Record<string, boolean>>({})
+const gaugePlayKey = ref(0)
 
 const num = (v: any) => Number(v ?? 0)
 const toNamed = (rows: any[], nameKey: string, valueKey: string): NamedValue[] =>
@@ -283,6 +284,7 @@ function switchTab(tab: Tab) {
     quote: loadQuote
   }
   loader[tab]()
+  if (tab === 'completion') gaugePlayKey.value += 1
 }
 
 onMounted(() => switchTab('device'))
@@ -349,7 +351,7 @@ onMounted(() => switchTab('device'))
       <!-- 完成率 -->
       <template v-else-if="active === 'completion'">
         <div class="grid-2">
-          <div class="glass-panel"><div class="panel-title">实验完成率</div><div class="panel-body chart"><BaseChart :option="completionGaugeOpt" /></div></div>
+          <div class="glass-panel"><div class="panel-title">实验完成率</div><div class="panel-body chart"><BaseChart :option="completionGaugeOpt" :play-key="gaugePlayKey" /></div></div>
           <div class="glass-panel"><div class="panel-title">每日完成率变化</div><div class="panel-body chart"><BaseChart :option="completionTrendOpt" /></div></div>
         </div>
       </template>

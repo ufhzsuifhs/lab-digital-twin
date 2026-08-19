@@ -60,8 +60,8 @@ public interface StatsMapper {
             LEFT JOIN lab_machine m ON m.id = u.parent_machine_id
             LEFT JOIN lab_machine_load_management l
                    ON l.machine_id = u.id AND (l.endTime IS NULL OR l.endTime > NOW())
-            WHERE u.enabled = 1
-            ORDER BY u.sort_num, u.station_code
+            WHERE IFNULL(u.enabled, 1) = 1
+            ORDER BY IFNULL(u.sort_num, 9999), u.station_code
             """)
     List<Map<String, Object>> deviceListWithStatus();
 
@@ -394,7 +394,11 @@ public interface StatsMapper {
             LEFT JOIN lab_experiment_plan p ON p.registration_id = r.id
             LEFT JOIN lab_experiment_item e ON e.id = p.experiment_item_id
             LEFT JOIN lab_machine_unit u ON u.id = p.machine_id
-            LIMIT 500
+            WHERE r.application_department IS NOT NULL
+               OR r.business_unit IS NOT NULL
+               OR p.experiment_item_id IS NOT NULL
+               OR p.machine_id IS NOT NULL
+            LIMIT 800
             """)
     List<Map<String, Object>> relationEdges();
 

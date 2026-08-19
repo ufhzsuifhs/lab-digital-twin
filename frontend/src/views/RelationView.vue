@@ -6,32 +6,38 @@ import {
   Light,
   Line3D,
   ObserveCanvas3D,
-  renderer,
+  renderer as renderer3d,
   Sphere,
   ZoomCanvas3D
 } from '@antv/g6-extension-3d'
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { fetchRelationGraph } from '@/api/relation'
 
 /**
- * 关系分析：AntV G6 3D 力导向网络。
- * 节点：部门 / 事业部 / 机种 / 实验项目 / 设备；3D 球体 + 光源；
- * 力导向发散后，鼠标按住拖拽可旋转视角（roll/drag-canvas-3d），滚轮缩放。
+ * 关系分析：优先 3D 力导向；容器未就绪 / WebGL 失败时回退 2D，避免服务器上空白。
  */
 
-// 注册 3D 扩展（模块级，仅执行一次）
-register(ExtensionCategory.PLUGIN, '3d-light', Light)
-register(ExtensionCategory.NODE, 'sphere', Sphere)
-register(ExtensionCategory.EDGE, 'line3d', Line3D)
-register(ExtensionCategory.BEHAVIOR, 'drag-canvas-3d', DragCanvas3D)
-register(ExtensionCategory.BEHAVIOR, 'observe-canvas-3d', ObserveCanvas3D)
-register(ExtensionCategory.BEHAVIOR, 'zoom-canvas-3d', ZoomCanvas3D)
-register(ExtensionCategory.LAYOUT, 'd3-force-3d', D3Force3DLayout as any)
+try {
+  register(ExtensionCategory.PLUGIN, '3d-light', Light)
+  register(ExtensionCategory.NODE, 'sphere', Sphere)
+  register(ExtensionCategory.EDGE, 'line3d', Line3D)
+  register(ExtensionCategory.BEHAVIOR, 'drag-canvas-3d', DragCanvas3D)
+  register(ExtensionCategory.BEHAVIOR, 'observe-canvas-3d', ObserveCanvas3D)
+  register(ExtensionCategory.BEHAVIOR, 'zoom-canvas-3d', ZoomCanvas3D)
+  register(ExtensionCategory.LAYOUT, 'd3-force-3d', D3Force3DLayout as any)
+} catch {
+  /* 重复 register 忽略 */
+}
 
 const container = ref<HTMLDivElement>()
 const nodeDetail = ref<any>(null)
+const loading = ref(true)
+const errorText = ref('')
+const empty = ref(false)
+const renderMode = ref<'3d' | '2d'>('3d')
 let graph: Graph | null = null
 let selectedId: string | null = null
+let resizeObserver: ResizeObserver | null = null
 
 const CATEGORY_COLOR: Record<string, string> = {
   department: '#22d3ee',
@@ -49,106 +55,189 @@ const CATEGORY_LABEL: Record<string, string> = {
   machine: '设备'
 }
 
-function initGraph() {
-  const el = container.value
-  if (!el) return
-  graph = new Graph({
-    container: el,
-    renderer, // 3D 渲染器
-    data: { nodes: [], edges: [] },
-    node: {
-      type: 'sphere',
-      style: {
-        size: 42,
-        fill: (d: any) => CATEGORY_COLOR[d.data?.category] || '#60a5fa',
-        materialType: 'phong',
-        pointerEvents: 'all',
-        labelText: (d: any) => d.data?.label || d.id,
-        labelFill: '#e6f1ff',
-        labelFontSize: 13,
-        labelPlacement: 'bottom',
-        labelOffsetY: 8
-      },
-      state: {
-        selected: {
-          size: 62
-        }
-      }
-    },
-    edge: {
-      type: 'line3d',
-      style: {
-        stroke: 'rgba(120,160,230,0.45)',
-        lineWidth: 1.5
-      }
-    },
-    layout: {
-      type: 'd3-force-3d',
-      link: { distance: 240 },
-      manyBody: { strength: -650 },
-      collide: { radius: 80 }
-    },
-    behaviors: [
-      { type: 'observe-canvas-3d', mode: 'orbiting' },
-      { type: 'drag-canvas-3d', trigger: ['right', 'drag'] },
-      'zoom-canvas-3d'
-    ],
-    plugins: [
-      {
-        type: 'camera-setting',
-        projectionMode: 'perspective',
-        near: 0.1,
-        far: 1000,
-        fov: 50
-      },
-      {
-        type: '3d-light',
-        directional: { direction: [0, 0, 1] }
-      }
-    ]
-  })
+function canWebGL() {
+  try {
+    const c = document.createElement('canvas')
+    return !!(c.getContext('webgl2') || c.getContext('webgl') || c.getContext('experimental-webgl'))
+  } catch {
+    return false
+  }
+}
 
-  graph.on('click', (evt: any) => {
+function waitForSize(el: HTMLElement, timeout = 4000): Promise<boolean> {
+  if (el.clientWidth >= 8 && el.clientHeight >= 8) return Promise.resolve(true)
+  return new Promise((resolve) => {
+    const start = Date.now()
+    const timer = window.setInterval(() => {
+      if (el.clientWidth >= 8 && el.clientHeight >= 8) {
+        window.clearInterval(timer)
+        resolve(true)
+      } else if (Date.now() - start > timeout) {
+        window.clearInterval(timer)
+        resolve(el.clientWidth > 0 && el.clientHeight > 0)
+      }
+    }, 50)
+  })
+}
+
+function bindClicks(g: Graph) {
+  g.on('click', (evt: any) => {
     const target = evt.target
     if (evt.targetType === 'node' && target?.id) {
-      // 清除上一个节点的选中状态
       if (selectedId && selectedId !== target.id) {
-        graph?.setElementState(selectedId, [])
+        g.setElementState(selectedId, [])
       }
       selectedId = target.id
-      graph?.setElementState(target.id, ['selected'])
+      g.setElementState(target.id, ['selected'])
       nodeDetail.value = {
         id: target.id,
         label: target.data?.label || target.id,
         category: CATEGORY_LABEL[target.data?.category] || target.data?.category
       }
-      // 以选中节点为中心：聚焦该节点，之后旋转/缩放都围绕它
-      graph?.focusElement(target.id)
+      g.focusElement(target.id)
     } else {
-      // 点击空白处：清除选中状态并关闭详情
       if (selectedId) {
-        graph?.setElementState(selectedId, [])
+        g.setElementState(selectedId, [])
         selectedId = null
       }
       nodeDetail.value = null
     }
   })
-
-  graph.render()
 }
 
-async function loadGraph() {
-  const data = await fetchRelationGraph()
-  if (graph && data) {
-    graph.setData({
-      nodes: data.nodes.map((n) => ({ id: n.id, data: { label: n.label, category: n.category } })),
-      edges: data.edges.map((e) => ({ id: e.id, source: e.source, target: e.target, data: { label: e.label } }))
+function createGraph(el: HTMLElement, data: { nodes: any[]; edges: any[] }, use3d: boolean) {
+  const width = Math.max(el.clientWidth, 320)
+  const height = Math.max(el.clientHeight, 240)
+  if (use3d) {
+    return new Graph({
+      container: el,
+      renderer: renderer3d,
+      width,
+      height,
+      data,
+      node: {
+        type: 'sphere',
+        style: {
+          size: 42,
+          fill: (d: any) => CATEGORY_COLOR[d.data?.category] || '#60a5fa',
+          materialType: 'phong',
+          pointerEvents: 'all',
+          labelText: (d: any) => d.data?.label || d.id,
+          labelFill: '#e6f1ff',
+          labelFontSize: 13,
+          labelPlacement: 'bottom',
+          labelOffsetY: 8
+        },
+        state: { selected: { size: 62 } }
+      },
+      edge: {
+        type: 'line3d',
+        style: {
+          stroke: 'rgba(120,160,230,0.45)',
+          lineWidth: 1.5
+        }
+      },
+      layout: {
+        type: 'd3-force-3d',
+        link: { distance: 240 },
+        manyBody: { strength: -650 },
+        collide: { radius: 80 }
+      },
+      behaviors: [
+        { type: 'observe-canvas-3d', mode: 'orbiting' },
+        { type: 'drag-canvas-3d', trigger: ['right', 'drag'] },
+        'zoom-canvas-3d'
+      ],
+      plugins: [
+        {
+          type: 'camera-setting',
+          projectionMode: 'perspective',
+          near: 0.1,
+          far: 1000,
+          fov: 50
+        },
+        {
+          type: '3d-light',
+          directional: { direction: [0, 0, 1] }
+        }
+      ]
     })
-    graph.render()
+  }
+  return new Graph({
+    container: el,
+    width,
+    height,
+    autoFit: 'view',
+    data,
+    node: {
+      style: {
+        size: 36,
+        fill: (d: any) => CATEGORY_COLOR[d.data?.category] || '#60a5fa',
+        stroke: 'rgba(230,241,255,0.35)',
+        lineWidth: 1,
+        labelText: (d: any) => d.data?.label || d.id,
+        labelFill: '#e6f1ff',
+        labelFontSize: 11,
+        labelPlacement: 'bottom',
+        labelOffsetY: 6
+      },
+      state: {
+        selected: {
+          size: 48,
+          stroke: '#22d3ee',
+          lineWidth: 2
+        }
+      }
+    },
+    edge: {
+      style: {
+        stroke: 'rgba(120,160,230,0.45)',
+        lineWidth: 1.2,
+        endArrow: true
+      }
+    },
+    layout: {
+      type: 'd3-force',
+      link: { distance: 160 },
+      manyBody: { strength: -420 },
+      collide: { radius: 40 }
+    },
+    behaviors: ['drag-canvas', 'zoom-canvas', 'drag-element']
+  })
+}
+
+async function mountGraph(data: { nodes: any[]; edges: any[] }) {
+  const el = container.value
+  if (!el) throw new Error('关系图画布未就绪')
+  const try3d = canWebGL()
+  let lastError: unknown = null
+  if (try3d) {
+    try {
+      graph = createGraph(el, data, true)
+      bindClicks(graph)
+      await graph.render()
+      graph.resize(el.clientWidth, el.clientHeight)
+      await graph.fitView()
+      renderMode.value = '3d'
+      return
+    } catch (e) {
+      lastError = e
+      graph?.destroy()
+      graph = null
+      el.querySelectorAll('canvas').forEach((c) => c.remove())
+    }
+  }
+  graph = createGraph(el, data, false)
+  bindClicks(graph)
+  await graph.render()
+  graph.resize(el.clientWidth, el.clientHeight)
+  await graph.fitView()
+  renderMode.value = '2d'
+  if (lastError) {
+    console.warn('关系分析 3D 不可用，已回退 2D', lastError)
   }
 }
 
-/** 复位视角：回到全局视图，清除选中节点详情 */
 function resetView() {
   if (selectedId) {
     graph?.setElementState(selectedId, [])
@@ -159,15 +248,48 @@ function resetView() {
 }
 
 onMounted(async () => {
-  initGraph()
+  loading.value = true
+  errorText.value = ''
+  empty.value = false
+  await nextTick()
+  const el = container.value
+  if (!el) {
+    loading.value = false
+    errorText.value = '关系图画布未找到'
+    return
+  }
+  const sized = await waitForSize(el)
+  if (!sized) {
+    loading.value = false
+    errorText.value = '关系图画布尺寸为 0，请检查页面布局后刷新'
+    return
+  }
   try {
-    await loadGraph()
-  } catch {
-    /* 后端未启动时静默 */
+    const data = await fetchRelationGraph()
+    const nodes = data?.nodes || []
+    const edges = data?.edges || []
+    if (!nodes.length) {
+      empty.value = true
+      return
+    }
+    await mountGraph({ nodes, edges })
+    resizeObserver = new ResizeObserver(() => {
+      if (!graph || !container.value) return
+      const w = container.value.clientWidth
+      const h = container.value.clientHeight
+      if (w >= 8 && h >= 8) graph.resize(w, h)
+    })
+    resizeObserver.observe(el)
+  } catch (e: any) {
+    errorText.value = e?.message || '关系数据加载失败，请确认 /api/relation/graph 可访问'
+  } finally {
+    loading.value = false
   }
 })
 
 onBeforeUnmount(() => {
+  resizeObserver?.disconnect()
+  resizeObserver = null
   graph?.destroy()
   graph = null
 })
@@ -181,12 +303,16 @@ onBeforeUnmount(() => {
         <span v-for="(c, k) in CATEGORY_COLOR" :key="k" class="lg">
           <i class="sw" :style="{ background: c }"></i>{{ CATEGORY_LABEL[k] }}
         </span>
-        <span class="hint">🖱 按住拖拽旋转 · 滚轮缩放</span>
+        <span class="hint">{{ renderMode === '3d' ? '🖱 按住拖拽旋转 · 滚轮缩放' : '🖱 拖拽画布 · 滚轮缩放' }}</span>
       </div>
     </header>
 
-    <div ref="container" class="graph-container">
-      <button class="reset-btn" @click="resetView">⟲ 复位视角</button>
+    <div class="graph-shell">
+      <div ref="container" class="graph-canvas" />
+      <button v-if="!loading && !errorText && !empty" class="reset-btn" @click="resetView">⟲ 复位视角</button>
+      <div v-if="loading" class="graph-msg">正在加载关系网络…</div>
+      <div v-else-if="errorText" class="graph-msg is-error">{{ errorText }}</div>
+      <div v-else-if="empty" class="graph-msg">暂无关系数据</div>
     </div>
 
     <transition name="fade">
@@ -205,6 +331,7 @@ onBeforeUnmount(() => {
   height: 100%;
   display: flex;
   flex-direction: column;
+  min-height: 0;
 }
 .legend {
   display: flex;
@@ -212,6 +339,7 @@ onBeforeUnmount(() => {
   font-size: 12px;
   color: var(--text-mid);
   align-items: center;
+  flex-wrap: wrap;
 }
 .lg {
   display: inline-flex;
@@ -228,8 +356,9 @@ onBeforeUnmount(() => {
   margin-left: 8px;
   color: var(--text-low);
 }
-.graph-container {
+.graph-shell {
   flex: 1;
+  min-height: 0;
   margin: 0 20px 20px;
   border-radius: var(--radius);
   border: 1px solid var(--border);
@@ -238,8 +367,28 @@ onBeforeUnmount(() => {
   cursor: grab;
   position: relative;
 }
-.graph-container:active {
+.graph-shell:active {
   cursor: grabbing;
+}
+.graph-canvas {
+  position: absolute;
+  inset: 0;
+}
+.graph-msg {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-mid);
+  font-size: 14px;
+  z-index: 4;
+  pointer-events: none;
+}
+.graph-msg.is-error {
+  color: #fca5a5;
+  padding: 0 24px;
+  text-align: center;
 }
 .reset-btn {
   position: absolute;

@@ -9,6 +9,7 @@ import type { EChartsOption } from 'echarts'
 /** 首页运营大屏：指标卡 + 设备状态环形 + 完成率仪表盘 + 申请趋势 + 进行中列表 + NG 告警 */
 const now = ref(new Date())
 const overview = ref<Record<string, any>>({})
+const gaugePlayKey = ref(0)
 let timer: number | undefined
 
 const num = (v: any) => Number(v ?? 0)
@@ -18,7 +19,12 @@ const completionRate = () => overview.value.completionRate || {}
 const dist = () => overview.value.deviceStatusDist || {}
 
 function load() {
-  fetchOverview().then((d) => (overview.value = d)).catch(() => {})
+  fetchOverview()
+    .then((d) => {
+      overview.value = d
+      gaugePlayKey.value += 1
+    })
+    .catch(() => {})
 }
 
 function fmtTime(d: Date) {
@@ -176,7 +182,7 @@ onUnmounted(() => {
       </div>
       <div class="glass-panel">
         <div class="panel-title">实验完成率</div>
-        <div class="panel-body chart"><BaseChart :option="gaugeOpt" /></div>
+        <div class="panel-body chart"><BaseChart :option="gaugeOpt" :play-key="gaugePlayKey" /></div>
       </div>
       <div class="glass-panel">
         <div class="panel-title">实验申请趋势（近 30 天）</div>
@@ -282,6 +288,17 @@ onUnmounted(() => {
   padding: 8px 24px;
   flex: 1;
   min-height: 0;
+}
+.charts :deep(.glass-panel) {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+.charts :deep(.panel-body.chart) {
+  flex: 1;
+  min-height: 180px;
+  height: auto;
 }
 .chart {
   height: 100%;
