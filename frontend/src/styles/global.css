@@ -1,0 +1,181 @@
+/* ============================================================
+   智能实验室数字孪生运营驾驶舱 —— 全局设计系统
+   未来科技 · 深色背景 · 玻璃拟态 · 动态光效 · 数字 HUD
+   ============================================================ */
+:root {
+  /* 深色背景层次 */
+  --bg-deep: #050a1a;
+  --bg-base: #0a1226;
+  --bg-panel: rgba(13, 25, 50, 0.55);
+  --bg-panel-solid: #0d1932;
+
+  /* 主色 / 霓虹 */
+  --primary: #22d3ee;      /* 青色 */
+  --primary-dim: #0891b2;
+  --accent: #6366f1;       /* 靛蓝 */
+  --success: #34d399;      /* 绿 */
+  --warning: #fbbf24;      /* 黄 */
+  --danger: #f87171;       /* 红 */
+  --info: #60a5fa;         /* 蓝 */
+
+  /* 文本 */
+  --text-hi: #e6f1ff;
+  --text-mid: #94a3c7;
+  --text-low: #55678f;
+
+  /* 边框 / 发光 */
+  --border: rgba(34, 211, 238, 0.18);
+  --border-strong: rgba(34, 211, 238, 0.45);
+  --glow: 0 0 12px rgba(34, 211, 238, 0.35);
+
+  /* 玻璃拟态 */
+  --glass-bg: linear-gradient(135deg, rgba(20, 36, 70, 0.6), rgba(8, 16, 38, 0.72));
+  --glass-blur: blur(12px);
+  --glass-border: 1px solid rgba(120, 160, 230, 0.18);
+  --radius: 12px;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  width: 100%;
+}
+
+body {
+  background: radial-gradient(1200px 800px at 50% -10%, #12235a 0%, transparent 55%),
+    radial-gradient(900px 600px at 90% 110%, #0a2f4a 0%, transparent 50%),
+    var(--bg-base);
+  color: var(--text-hi);
+  font-family: 'Segoe UI', 'Microsoft YaHei', 'PingFang SC', sans-serif;
+  font-size: 14px;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 数字 HUD 字体 */
+.hud-num {
+  font-family: 'Consolas', 'DIN Alternate', 'Bahnschrift', monospace;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+
+/* 玻璃拟态面板 */
+.glass-panel {
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: var(--glass-border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 32px rgba(2, 8, 23, 0.55);
+  position: relative;
+  overflow: hidden;
+}
+
+/* 面板四角装饰光 */
+.glass-panel::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: var(--radius);
+  background:
+    linear-gradient(var(--border), var(--border)) top left / 18px 1px no-repeat,
+    linear-gradient(var(--border), var(--border)) top left / 1px 18px no-repeat,
+    linear-gradient(var(--border), var(--border)) top right / 18px 1px no-repeat,
+    linear-gradient(var(--border), var(--border)) top right / 1px 18px no-repeat,
+    linear-gradient(var(--border), var(--border)) bottom left / 18px 1px no-repeat,
+    linear-gradient(var(--border), var(--border)) bottom left / 1px 18px no-repeat,
+    linear-gradient(var(--border), var(--border)) bottom right / 18px 1px no-repeat,
+    linear-gradient(var(--border), var(--border)) bottom right / 1px 18px no-repeat;
+}
+
+/* 面板标题 */
+.panel-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-hi);
+  border-bottom: 1px solid rgba(120, 160, 230, 0.12);
+}
+
+.panel-title::before {
+  content: '';
+  width: 4px;
+  height: 14px;
+  border-radius: 2px;
+  background: linear-gradient(180deg, var(--primary), var(--accent));
+  box-shadow: var(--glow);
+}
+
+.panel-body {
+  padding: 14px 16px;
+}
+
+/* 顶部标题栏发光 */
+.page-header {
+  position: relative;
+  padding: 16px 24px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: linear-gradient(180deg, rgba(10, 20, 46, 0.85), rgba(10, 20, 46, 0));
+}
+
+.page-title {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  background: linear-gradient(90deg, #e6f1ff, var(--primary));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  text-shadow: none;
+}
+
+/* 状态色 */
+.status-idle { color: var(--success); }
+.status-running { color: var(--info); }
+.status-error { color: var(--danger); }
+.status-full { color: var(--warning); }
+
+/* 通用滚动条 */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(34, 211, 238, 0.25);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* 动态光效：呼吸发光 */
+@keyframes breathe {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+.glow-breathe {
+  animation: breathe 2.4s ease-in-out infinite;
+}
+
+/* 大屏栅格 */
+.screen-grid {
+  display: grid;
+  gap: 14px;
+  padding: 14px 20px 20px;
+  height: calc(100% - 72px);
+  grid-template-columns: repeat(12, 1fr);
+  grid-template-rows: repeat(12, 1fr);
+}

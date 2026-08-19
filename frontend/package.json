@@ -1,0 +1,30 @@
+{
+  "name": "lab-twin-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "vue-tsc --noEmit"
+  },
+  "dependencies": {
+    "@antv/g6": "^5.0.0",
+    "@antv/g6-extension-3d": "^0.1.23",
+    "axios": "^1.7.2",
+    "echarts": "^5.5.0",
+    "pinia": "^2.1.7",
+    "three": "^0.165.0",
+    "vue": "^3.4.27",
+    "vue-router": "^4.3.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.12",
+    "@types/three": "^0.165.0",
+    "@vitejs/plugin-vue": "^5.0.4",
+    "typescript": "^5.4.5",
+    "vite": "^5.2.11",
+    "vue-tsc": "^2.0.19"
+  }
+}

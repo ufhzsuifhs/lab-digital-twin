@@ -1,0 +1,55 @@
+server:
+  port: 8220
+
+spring:
+  application:
+    name: lab-twin
+  profiles:
+    active: dev
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://localhost:3306/ruoyi7?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+    username: root
+    password: 12345600++
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      database: 0
+      timeout: 3000ms
+
+mybatis-plus:
+  mapper-locations: classpath*:mapper/**/*.xml
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
+  global-config:
+    db-config:
+      id-type: assign_id
+
+# 实验室驾驶舱业务配置
+lab:
+  # ClickHouse 分析库（可选；未配置/不可用时自动回退 MySQL）
+  clickhouse:
+    enabled: false
+    url: jdbc:clickhouse://localhost:8123/lab_dw
+    username: default
+    password: ""
+  # 同步任务（MySQL → ClickHouse）
+  sync:
+    interval-ms: 60000
+    enabled: false
+  # 热点统计缓存 TTL（秒）
+  cache:
+    ttl-seconds: 30
+  # WebSocket 设备状态定时推送（无 CDC 时的实时方案）
+  realtime:
+    enabled: false
+    interval-ms: 5000
+
+logging:
+  level:
+    com.lab.twin: info
