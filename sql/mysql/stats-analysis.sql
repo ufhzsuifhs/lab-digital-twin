@@ -240,29 +240,32 @@ GROUP BY ng_reason ORDER BY cnt DESC LIMIT 20;
 -- ============================================================================
 -- 九、实验结果分析（申请单 / DQA 单 分别统计，只统计已有结果）
 -- ============================================================================
--- 9.1 实验申请单 OK/NG 与合格率
-SELECT
-    SUM(CASE WHEN UPPER(experiment_result) IN ('OK','合格') THEN 1 ELSE 0 END) AS ok_count,
-    SUM(CASE WHEN UPPER(experiment_result) IN ('NG','不合格') THEN 1 ELSE 0 END) AS ng_count,
-    ROUND(SUM(CASE WHEN UPPER(experiment_result) IN ('OK','合格') THEN 1 ELSE 0 END) * 100.0 /
-          NULLIF(SUM(CASE WHEN UPPER(experiment_result) IN ('OK','合格','NG','不合格') THEN 1 ELSE 0 END),0), 2) AS pass_rate_pct
+-- 9.1 实验申请单结果占比（库里有什么结果值就统计什么）
+SELECT COALESCE(NULLIF(TRIM(experiment_result), ''), '未记录') AS result, COUNT(*) AS cnt
 FROM lab_reliability_experiment_reg
-WHERE experiment_result IS NOT NULL;
+WHERE experiment_result IS NOT NULL AND TRIM(experiment_result) <> ''
+GROUP BY result
+ORDER BY cnt DESC;
 
--- 9.2 DQA 申请单 OK/NG 与合格率（evaluation_result：合格/不合格）
-SELECT
-    SUM(CASE WHEN evaluation_result = '合格' THEN 1 ELSE 0 END) AS ok_count,
-    SUM(CASE WHEN evaluation_result = '不合格' THEN 1 ELSE 0 END) AS ng_count,
-    ROUND(SUM(CASE WHEN evaluation_result = '合格' THEN 1 ELSE 0 END) * 100.0 /
-          NULLIF(SUM(CASE WHEN evaluation_result IN ('合格','不合格') THEN 1 ELSE 0 END),0), 2) AS pass_rate_pct
+-- 9.2 DQA 申请单结果占比
+SELECT COALESCE(NULLIF(TRIM(evaluation_result), ''), '未记录') AS result, COUNT(*) AS cnt
 FROM lab_dqa_optical_evaluation
-WHERE evaluation_result IS NOT NULL;
+WHERE evaluation_result IS NOT NULL AND TRIM(evaluation_result) <> ''
+GROUP BY result
+ORDER BY cnt DESC;
 
--- 9.3 结果分布（OK/NG 饼图）
-SELECT UPPER(experiment_result) AS result, COUNT(*) AS cnt
-FROM lab_reliability_experiment_reg
-WHERE experiment_result IS NOT NULL
-GROUP BY result;
+-- 9.3 全部结果分布（申请单 + DQA）
+SELECT result, COUNT(*) AS cnt FROM (
+    SELECT COALESCE(NULLIF(TRIM(experiment_result), ''), '未记录') AS result
+    FROM lab_reliability_experiment_reg
+    WHERE experiment_result IS NOT NULL AND TRIM(experiment_result) <> ''
+    UNION ALL
+    SELECT COALESCE(NULLIF(TRIM(evaluation_result), ''), '未记录') AS result
+    FROM lab_dqa_optical_evaluation
+    WHERE evaluation_result IS NOT NULL AND TRIM(evaluation_result) <> ''
+) t
+GROUP BY result
+ORDER BY cnt DESC;
 
 -- ============================================================================
 -- 十、DQA 专项分析（lab_dqa_optical_evaluation + lab_dqa_project）

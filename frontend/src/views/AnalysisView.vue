@@ -196,30 +196,9 @@ function loadResult() {
   load('resultDqa', () => analysisApi.resultOkNg('dqa'))
   load('resultDist', analysisApi.resultDistribution)
 }
-const resultRelOpt = computed(() => {
-  const r = data.resultRel || {}
-  return pieOption(
-    [
-      { name: 'OK', value: num(r.ok_count) },
-      { name: 'NG', value: num(r.ng_count) }
-    ],
-    '申请单结果'
-  )
-})
-const resultDqaOpt = computed(() => {
-  const r = data.resultDqa || {}
-  return pieOption(
-    [
-      { name: '合格', value: num(r.ok_count) },
-      { name: '不合格', value: num(r.ng_count) }
-    ],
-    'DQA 结果'
-  )
-})
-const resultDistOpt = computed(() => {
-  const rows = (data.resultDist || []).map((r: any) => ({ name: String(r.result), value: num(r.cnt) }))
-  return pieOption(rows, '结果分布')
-})
+const resultRelOpt = computed(() => pieOption(toNamed(data.resultRel, 'result', 'cnt'), '申请单结果'))
+const resultDqaOpt = computed(() => pieOption(toNamed(data.resultDqa, 'result', 'cnt'), 'DQA 结果'))
+const resultDistOpt = computed(() => pieOption(toNamed(data.resultDist, 'result', 'cnt'), '全部结果'))
 
 // ============ DQA ============
 function loadDqa() {
@@ -374,9 +353,9 @@ onMounted(() => switchTab('device'))
       <!-- 实验结果 -->
       <template v-else-if="active === 'result'">
         <div class="grid-3">
-          <div class="glass-panel"><div class="panel-title">申请单 OK/NG</div><div class="panel-body chart"><BaseChart :option="resultRelOpt" /></div></div>
-          <div class="glass-panel"><div class="panel-title">DQA 单 合格/不合格</div><div class="panel-body chart"><BaseChart :option="resultDqaOpt" /></div></div>
-          <div class="glass-panel"><div class="panel-title">结果分布</div><div class="panel-body chart"><BaseChart :option="resultDistOpt" /></div></div>
+          <div class="glass-panel"><div class="panel-title">申请单结果占比</div><div class="panel-body chart"><BaseChart :option="resultRelOpt" /></div></div>
+          <div class="glass-panel"><div class="panel-title">DQA 单结果占比</div><div class="panel-body chart"><BaseChart :option="resultDqaOpt" /></div></div>
+          <div class="glass-panel"><div class="panel-title">全部结果分布</div><div class="panel-body chart"><BaseChart :option="resultDistOpt" /></div></div>
         </div>
       </template>
 

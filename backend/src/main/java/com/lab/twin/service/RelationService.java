@@ -13,7 +13,7 @@ import java.util.Set;
 
 /**
  * 关系网络服务：将扁平行数据构建为 AntV G6 图数据（nodes + edges）。
- * 节点 ID 带类型前缀，避免部门名与机台编号撞号导致 G6 无法渲染。
+ * 节点：部门 / 事业部 / 机种 / 实验项目 / 设备；边：部门→项目→设备、事业部→部门。
  */
 @Service
 @RequiredArgsConstructor
@@ -32,7 +32,6 @@ public class RelationService {
         Set<String> deptToItem = new LinkedHashSet<>();
         Set<String> itemToMachine = new LinkedHashSet<>();
         Set<String> bizToDept = new LinkedHashSet<>();
-        Set<String> typeToItem = new LinkedHashSet<>();
 
         for (Map<String, Object> r : rows) {
             String dept = str(r.get("dept"));
@@ -42,45 +41,38 @@ public class RelationService {
             String itemName = str(r.get("experiment_item_name"));
             String machineId = str(r.get("machine_id"));
             String station = str(r.get("station_code"));
-            String itemKey = itemName != null ? itemName : itemId;
-            String machineKey = station != null ? station : machineId;
 
             if (dept != null) deptNodes.add(dept);
             if (biz != null) bizNodes.add(biz);
             if (type != null) typeNodes.add(type);
-            if (itemKey != null) itemNodes.add(itemKey);
-            if (machineKey != null) machineNodes.add(machineKey);
+            if (itemId != null) itemNodes.add(itemName != null ? itemName : itemId);
+            if (machineId != null) machineNodes.add(station != null ? station : machineId);
 
-            if (dept != null && itemKey != null) deptToItem.add(dept + "|" + itemKey);
-            if (itemKey != null && machineKey != null) itemToMachine.add(itemKey + "|" + machineKey);
+            if (dept != null && (itemId != null)) deptToItem.add(dept + "|" + (itemName != null ? itemName : itemId));
+            if (itemId != null && machineId != null) itemToMachine.add((itemName != null ? itemName : itemId) + "|" + (station != null ? station : machineId));
             if (biz != null && dept != null) bizToDept.add(biz + "|" + dept);
-            if (type != null && itemKey != null) typeToItem.add(type + "|" + itemKey);
         }
 
         List<Map<String, Object>> nodes = new ArrayList<>();
-        deptNodes.forEach(n -> nodes.add(node("dept:" + n, n, "department")));
-        bizNodes.forEach(n -> nodes.add(node("biz:" + n, n, "business_unit")));
-        typeNodes.forEach(n -> nodes.add(node("type:" + n, n, "machine_type")));
-        itemNodes.forEach(n -> nodes.add(node("item:" + n, n, "experiment_item")));
-        machineNodes.forEach(n -> nodes.add(node("machine:" + n, n, "machine")));
+        deptNodes.forEach(n -> nodes.add(node(n, n, "department")));
+        bizNodes.forEach(n -> nodes.add(node(n, n, "business_unit")));
+        typeNodes.forEach(n -> nodes.add(node(n, n, "machine_type")));
+        itemNodes.forEach(n -> nodes.add(node(n, n, "experiment_item")));
+        machineNodes.forEach(n -> nodes.add(node(n, n, "machine")));
 
         List<Map<String, Object>> edges = new ArrayList<>();
         int i = 0;
         for (String e : bizToDept) {
             String[] parts = e.split("\\|", 2);
-            edges.add(edge("e" + (i++), "biz:" + parts[0], "dept:" + parts[1], "包含"));
+            edges.add(edge("e" + (i++), parts[0], parts[1], "包含"));
         }
         for (String e : deptToItem) {
             String[] parts = e.split("\\|", 2);
-            edges.add(edge("e" + (i++), "dept:" + parts[0], "item:" + parts[1], "申请"));
+            edges.add(edge("e" + (i++), parts[0], parts[1], "申请"));
         }
         for (String e : itemToMachine) {
             String[] parts = e.split("\\|", 2);
-            edges.add(edge("e" + (i++), "item:" + parts[0], "machine:" + parts[1], "使用"));
-        }
-        for (String e : typeToItem) {
-            String[] parts = e.split("\\|", 2);
-            edges.add(edge("e" + (i++), "type:" + parts[0], "item:" + parts[1], "机种"));
+            edges.add(edge("e" + (i++), parts[0], parts[1], "使用"));
         }
 
         Map<String, Object> result = new LinkedHashMap<>();

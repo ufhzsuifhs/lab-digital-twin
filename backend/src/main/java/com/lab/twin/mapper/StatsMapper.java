@@ -60,8 +60,8 @@ public interface StatsMapper {
             LEFT JOIN lab_machine m ON m.id = u.parent_machine_id
             LEFT JOIN lab_machine_load_management l
                    ON l.machine_id = u.id AND (l.endTime IS NULL OR l.endTime > NOW())
-            WHERE IFNULL(u.enabled, 1) = 1
-            ORDER BY IFNULL(u.sort_num, 9999), u.station_code
+            WHERE u.enabled = 1
+            ORDER BY u.sort_num, u.station_code
             """)
     List<Map<String, Object>> deviceListWithStatus();
 
@@ -273,33 +273,37 @@ public interface StatsMapper {
             """)
     List<Map<String, Object>> ngReasonAnalysis();
 
-    // ============ 九、实验结果 ============
+    // ============ 九、实验结果：按库里实际出现的结果值分组，有什么加载什么 ============
     @Select("""
-            SELECT
-                SUM(CASE WHEN UPPER(experiment_result) IN ('OK','合格') THEN 1 ELSE 0 END) AS ok_count,
-                SUM(CASE WHEN UPPER(experiment_result) IN ('NG','不合格') THEN 1 ELSE 0 END) AS ng_count,
-                ROUND(SUM(CASE WHEN UPPER(experiment_result) IN ('OK','合格') THEN 1 ELSE 0 END) * 100.0 /
-                      NULLIF(SUM(CASE WHEN UPPER(experiment_result) IN ('OK','合格','NG','不合格') THEN 1 ELSE 0 END),0), 2) AS pass_rate_pct
+            SELECT COALESCE(NULLIF(TRIM(experiment_result), ''), '未记录') AS result, COUNT(*) AS cnt
             FROM lab_reliability_experiment_reg
-            WHERE experiment_result IS NOT NULL
+            WHERE experiment_result IS NOT NULL AND TRIM(experiment_result) <> ''
+            GROUP BY result
+            ORDER BY cnt DESC
             """)
-    Map<String, Object> resultOkNgReliability();
+    List<Map<String, Object>> resultOkNgReliability();
 
     @Select("""
-            SELECT
-                SUM(CASE WHEN evaluation_result = '合格' THEN 1 ELSE 0 END) AS ok_count,
-                SUM(CASE WHEN evaluation_result = '不合格' THEN 1 ELSE 0 END) AS ng_count,
-                ROUND(SUM(CASE WHEN evaluation_result = '合格' THEN 1 ELSE 0 END) * 100.0 /
-                      NULLIF(SUM(CASE WHEN evaluation_result IN ('合格','不合格') THEN 1 ELSE 0 END),0), 2) AS pass_rate_pct
+            SELECT COALESCE(NULLIF(TRIM(evaluation_result), ''), '未记录') AS result, COUNT(*) AS cnt
             FROM lab_dqa_optical_evaluation
-            WHERE evaluation_result IS NOT NULL
+            WHERE evaluation_result IS NOT NULL AND TRIM(evaluation_result) <> ''
+            GROUP BY result
+            ORDER BY cnt DESC
             """)
-    Map<String, Object> resultOkNgDqa();
+    List<Map<String, Object>> resultOkNgDqa();
 
     @Select("""
-            SELECT UPPER(experiment_result) AS result, COUNT(*) AS cnt
-            FROM lab_reliability_experiment_reg
-            WHERE experiment_result IS NOT NULL GROUP BY result
+            SELECT result, COUNT(*) AS cnt FROM (
+                SELECT COALESCE(NULLIF(TRIM(experiment_result), ''), '未记录') AS result
+                FROM lab_reliability_experiment_reg
+                WHERE experiment_result IS NOT NULL AND TRIM(experiment_result) <> ''
+                UNION ALL
+                SELECT COALESCE(NULLIF(TRIM(evaluation_result), ''), '未记录') AS result
+                FROM lab_dqa_optical_evaluation
+                WHERE evaluation_result IS NOT NULL AND TRIM(evaluation_result) <> ''
+            ) t
+            GROUP BY result
+            ORDER BY cnt DESC
             """)
     List<Map<String, Object>> resultDistribution();
 
@@ -394,11 +398,7 @@ public interface StatsMapper {
             LEFT JOIN lab_experiment_plan p ON p.registration_id = r.id
             LEFT JOIN lab_experiment_item e ON e.id = p.experiment_item_id
             LEFT JOIN lab_machine_unit u ON u.id = p.machine_id
-            WHERE r.application_department IS NOT NULL
-               OR r.business_unit IS NOT NULL
-               OR p.experiment_item_id IS NOT NULL
-               OR p.machine_id IS NOT NULL
-            LIMIT 800
+            LIMIT 500
             """)
     List<Map<String, Object>> relationEdges();
 

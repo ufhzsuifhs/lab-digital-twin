@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import { ExtensionCategory, Graph, register } from '@antv/g6'
+import { ExtensionCategory, Graph, GraphEvent, register } from '@antv/g6'
 import {
   DragCanvas3D,
   D3Force3DLayout,
   Light,
   Line3D,
   ObserveCanvas3D,
-  renderer as renderer3d,
+  renderer,
   Sphere,
   ZoomCanvas3D
 } from '@antv/g6-extension-3d'
@@ -14,30 +14,33 @@ import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { fetchRelationGraph } from '@/api/relation'
 
 /**
- * 关系分析：优先 3D 力导向；容器未就绪 / WebGL 失败时回退 2D，避免服务器上空白。
+ * 关系分析：AntV G6 3D 力导向网络。
+ * 节点：部门 / 事业部 / 机种 / 实验项目 / 设备；3D 球体 + 光源；
+ * 力导向发散后，鼠标按住拖拽可旋转视角（roll/drag-canvas-3d），滚轮缩放。
  */
 
-try {
-  register(ExtensionCategory.PLUGIN, '3d-light', Light)
-  register(ExtensionCategory.NODE, 'sphere', Sphere)
-  register(ExtensionCategory.EDGE, 'line3d', Line3D)
-  register(ExtensionCategory.BEHAVIOR, 'drag-canvas-3d', DragCanvas3D)
-  register(ExtensionCategory.BEHAVIOR, 'observe-canvas-3d', ObserveCanvas3D)
-  register(ExtensionCategory.BEHAVIOR, 'zoom-canvas-3d', ZoomCanvas3D)
-  register(ExtensionCategory.LAYOUT, 'd3-force-3d', D3Force3DLayout as any)
-} catch {
-  /* 重复 register 忽略 */
-}
+// 注册 3D 扩展（模块级，仅执行一次）
+register(ExtensionCategory.PLUGIN, '3d-light', Light)
+register(ExtensionCategory.NODE, 'sphere', Sphere)
+register(ExtensionCategory.EDGE, 'line3d', Line3D)
+register(ExtensionCategory.BEHAVIOR, 'drag-canvas-3d', DragCanvas3D)
+register(ExtensionCategory.BEHAVIOR, 'observe-canvas-3d', ObserveCanvas3D)
+register(ExtensionCategory.BEHAVIOR, 'zoom-canvas-3d', ZoomCanvas3D)
+register(ExtensionCategory.LAYOUT, 'd3-force-3d', D3Force3DLayout as any)
 
 const container = ref<HTMLDivElement>()
 const nodeDetail = ref<any>(null)
-const loading = ref(true)
-const errorText = ref('')
-const empty = ref(false)
-const renderMode = ref<'3d' | '2d'>('3d')
 let graph: Graph | null = null
 let selectedId: string | null = null
+let pendingCenter = false
 let resizeObserver: ResizeObserver | null = null
+
+// 自动绕焦点旋转
+let rotateRaf = 0
+let rotateActive = false
+let userInteracting = false
+let lastFrameTs = 0
+const ROTATE_DEG_PER_SEC = 14 // 旋转速度：每秒 14°，约 26 秒一圈
 
 const CATEGORY_COLOR: Record<string, string> = {
   department: '#22d3ee',
@@ -55,239 +58,333 @@ const CATEGORY_LABEL: Record<string, string> = {
   machine: '设备'
 }
 
-function canWebGL() {
-  try {
-    const c = document.createElement('canvas')
-    return !!(c.getContext('webgl2') || c.getContext('webgl') || c.getContext('experimental-webgl'))
-  } catch {
-    return false
-  }
+/** 按类型分层拉开 Z，侧看时才有前后纵深，而不是叠成一条线 */
+const CATEGORY_Z: Record<string, number> = {
+  business_unit: 260,
+  department: 130,
+  experiment_item: 0,
+  machine_type: -130,
+  machine: -260
 }
 
-function waitForSize(el: HTMLElement, timeout = 4000): Promise<boolean> {
-  if (el.clientWidth >= 8 && el.clientHeight >= 8) return Promise.resolve(true)
+function hashOffset(id: string, span = 90) {
+  let h = 0
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0
+  return (Math.abs(h) % span) - span / 2
+}
+
+function layerZ(category?: string, id = '') {
+  return (CATEGORY_Z[category || ''] ?? 0) + hashOffset(id)
+}
+
+const ISO_CAMERA = {
+  elevation: 32,
+  azimuth: 42,
+  far: 40000,
+  fov: 45
+}
+
+let canvasCx = 0
+let canvasCy = 0
+
+function waitForSize(el: HTMLElement, timeout = 3000): Promise<{ w: number; h: number }> {
+  const read = () => ({ w: el.clientWidth, h: el.clientHeight })
+  const cur = read()
+  if (cur.w >= 8 && cur.h >= 8) return Promise.resolve(cur)
   return new Promise((resolve) => {
     const start = Date.now()
     const timer = window.setInterval(() => {
-      if (el.clientWidth >= 8 && el.clientHeight >= 8) {
+      const next = read()
+      if (next.w >= 8 && next.h >= 8) {
         window.clearInterval(timer)
-        resolve(true)
+        resolve(next)
       } else if (Date.now() - start > timeout) {
         window.clearInterval(timer)
-        resolve(el.clientWidth > 0 && el.clientHeight > 0)
+        resolve({ w: Math.max(next.w, 640), h: Math.max(next.h, 400) })
       }
     }, 50)
   })
 }
 
-function bindClicks(g: Graph) {
-  g.on('click', (evt: any) => {
+function nodeCentroid(): [number, number, number] {
+  if (!graph) return [canvasCx, canvasCy, 0]
+  const nodes = graph.getNodeData()
+  if (!nodes.length) return [canvasCx, canvasCy, 0]
+  let x = 0
+  let y = 0
+  let z = 0
+  nodes.forEach((n) => {
+    const p = graph!.getElementPosition(n.id)
+    x += Number(p?.[0] || 0)
+    y += Number(p?.[1] || 0)
+    z += Number(p?.[2] || 0)
+  })
+  const n = nodes.length
+  return [x / n, y / n, z / n]
+}
+
+function nodeSpread(center: [number, number, number]) {
+  if (!graph) return 240
+  const nodes = graph.getNodeData()
+  let max = 120
+  nodes.forEach((n) => {
+    const p = graph!.getElementPosition(n.id)
+    const dx = Number(p?.[0] || 0) - center[0]
+    const dy = Number(p?.[1] || 0) - center[1]
+    const dz = Number(p?.[2] || 0) - center[2]
+    max = Math.max(max, Math.hypot(dx, dy, dz))
+  })
+  return max
+}
+
+/** 3D 居中：焦点对准节点质心，距离按包围球温和拟合（~1.2 倍），既装下整图又不缩太小 */
+function centerView() {
+  if (!graph) return
+  const camera = graph.getCanvas()?.getCamera()
+  if (!camera) return
+  const el = container.value
+  if (el && el.clientWidth >= 8 && el.clientHeight >= 8) {
+    graph.resize(el.clientWidth, el.clientHeight)
+    canvasCx = el.clientWidth / 2
+    canvasCy = el.clientHeight / 2
+  }
+  const [cx, cy, cz] = nodeCentroid()
+  const spread = nodeSpread([cx, cy, cz])
+  // 温和拟合：按视场角反算距离，~1.2 倍余量，整图装下但不缩太小
+  const fovRad = (ISO_CAMERA.fov * Math.PI) / 180
+  const dist = (spread / Math.tan(fovRad / 2)) * 1.2 + 60
+  camera.setFocalPoint(cx, cy, cz)
+  camera.setDistance(dist)
+  camera.setNear(0.1)
+  camera.setFar(ISO_CAMERA.far)
+  camera.setFov(ISO_CAMERA.fov)
+  camera.setElevation(ISO_CAMERA.elevation)
+  camera.setAzimuth(ISO_CAMERA.azimuth)
+}
+
+/** 布局稳定后启动自动旋转：每帧按时间增量改方位角，绕焦点 360° 转 */
+function startAutoRotate() {
+  if (rotateActive) return
+  rotateActive = true
+  lastFrameTs = 0
+  const tick = (ts: number) => {
+    if (!rotateActive || !graph) {
+      rotateRaf = 0
+      return
+    }
+    const camera = graph.getCanvas()?.getCamera()
+    if (camera && !userInteracting) {
+      if (lastFrameTs) {
+        const dt = (ts - lastFrameTs) / 1000
+        // setAzimuth 接收的是度数，直接按度/秒累加
+        const cur = camera.getAzimuth()
+        camera.setAzimuth(cur + ROTATE_DEG_PER_SEC * dt)
+      }
+      lastFrameTs = ts
+    } else {
+      lastFrameTs = 0
+    }
+    rotateRaf = requestAnimationFrame(tick)
+  }
+  rotateRaf = requestAnimationFrame(tick)
+}
+
+function stopAutoRotate() {
+  rotateActive = false
+  if (rotateRaf) cancelAnimationFrame(rotateRaf)
+  rotateRaf = 0
+}
+
+function initGraph(el: HTMLElement, width: number, height: number) {
+  graph = new Graph({
+    container: el,
+    renderer, // 3D 渲染器
+    width,
+    height,
+    data: { nodes: [], edges: [] },
+    node: {
+      type: 'sphere',
+      style: {
+        size: 42,
+        fill: (d: any) => CATEGORY_COLOR[d.data?.category] || '#60a5fa',
+        materialType: 'phong',
+        pointerEvents: 'all',
+        labelText: (d: any) => d.data?.label || d.id,
+        labelFill: '#e6f1ff',
+        labelFontSize: 13,
+        labelPlacement: 'bottom',
+        labelOffsetY: 8
+      },
+      state: {
+        selected: {
+          size: 62
+        }
+      }
+    },
+    edge: {
+      type: 'line3d',
+      style: {
+        stroke: 'rgba(120,160,230,0.45)',
+        lineWidth: 1.5
+      }
+    },
+    layout: {
+      type: 'd3-force-3d',
+      numDimensions: 3,
+      // 加快收敛：默认 alphaDecay≈0.0228 要 ~10s，调高后 ~2-3s 分散完成即触发 AFTER_LAYOUT
+      alpha: 1,
+      alphaMin: 0.01,
+      alphaDecay: 0.05,
+      velocityDecay: 0.4,
+      link: { distance: 180, strength: 0.55 },
+      manyBody: { strength: -820 },
+      collide: { radius: 70 },
+      center: { x: canvasCx, y: canvasCy, z: 0, strength: 0.08 },
+      z: {
+        strength: 0.45,
+        z: (node: any) => layerZ(node.data?.category || node.category, String(node.id ?? ''))
+      }
+    },
+    behaviors: [
+      { type: 'observe-canvas-3d', mode: 'orbiting' },
+      { type: 'drag-canvas-3d', trigger: ['right', 'drag'] },
+      'zoom-canvas-3d'
+    ],
+    plugins: [
+      {
+        type: 'camera-setting',
+        projectionMode: 'perspective',
+        cameraType: 'orbiting',
+        near: 0.1,
+        far: ISO_CAMERA.far,
+        fov: ISO_CAMERA.fov,
+        aspect: 'auto',
+        // 初始斜视 + 合理距离，分散过程中即可见；AFTER_LAYOUT 后由 centerView 重新拟合
+        distance: 900,
+        elevation: ISO_CAMERA.elevation,
+        azimuth: ISO_CAMERA.azimuth
+      },
+      {
+        type: '3d-light',
+        directional: { direction: [0.6, -0.7, 0.8] },
+        ambient: { fill: '#8aa4d4', intensity: 1.2 }
+      }
+    ]
+  })
+
+  graph.on('click', (evt: any) => {
     const target = evt.target
     if (evt.targetType === 'node' && target?.id) {
+      // 清除上一个节点的选中状态
       if (selectedId && selectedId !== target.id) {
-        g.setElementState(selectedId, [])
+        graph?.setElementState(selectedId, [])
       }
       selectedId = target.id
-      g.setElementState(target.id, ['selected'])
+      graph?.setElementState(target.id, ['selected'])
       nodeDetail.value = {
         id: target.id,
         label: target.data?.label || target.id,
         category: CATEGORY_LABEL[target.data?.category] || target.data?.category
       }
-      g.focusElement(target.id)
+      // 以选中节点为中心：聚焦该节点，之后旋转/缩放都围绕它
+      graph?.focusElement(target.id)
     } else {
+      // 点击空白处：清除选中状态并关闭详情
       if (selectedId) {
-        g.setElementState(selectedId, [])
+        graph?.setElementState(selectedId, [])
         selectedId = null
       }
       nodeDetail.value = null
     }
   })
-}
 
-function createGraph(el: HTMLElement, data: { nodes: any[]; edges: any[] }, use3d: boolean) {
-  const width = Math.max(el.clientWidth, 320)
-  const height = Math.max(el.clientHeight, 240)
-  if (use3d) {
-    return new Graph({
-      container: el,
-      renderer: renderer3d,
-      width,
-      height,
-      data,
-      node: {
-        type: 'sphere',
-        style: {
-          size: 42,
-          fill: (d: any) => CATEGORY_COLOR[d.data?.category] || '#60a5fa',
-          materialType: 'phong',
-          pointerEvents: 'all',
-          labelText: (d: any) => d.data?.label || d.id,
-          labelFill: '#e6f1ff',
-          labelFontSize: 13,
-          labelPlacement: 'bottom',
-          labelOffsetY: 8
-        },
-        state: { selected: { size: 62 } }
-      },
-      edge: {
-        type: 'line3d',
-        style: {
-          stroke: 'rgba(120,160,230,0.45)',
-          lineWidth: 1.5
-        }
-      },
-      layout: {
-        type: 'd3-force-3d',
-        link: { distance: 240 },
-        manyBody: { strength: -650 },
-        collide: { radius: 80 }
-      },
-      behaviors: [
-        { type: 'observe-canvas-3d', mode: 'orbiting' },
-        { type: 'drag-canvas-3d', trigger: ['right', 'drag'] },
-        'zoom-canvas-3d'
-      ],
-      plugins: [
-        {
-          type: 'camera-setting',
-          projectionMode: 'perspective',
-          near: 0.1,
-          far: 1000,
-          fov: 50
-        },
-        {
-          type: '3d-light',
-          directional: { direction: [0, 0, 1] }
-        }
-      ]
-    })
-  }
-  return new Graph({
-    container: el,
-    width,
-    height,
-    autoFit: 'view',
-    data,
-    node: {
-      style: {
-        size: 36,
-        fill: (d: any) => CATEGORY_COLOR[d.data?.category] || '#60a5fa',
-        stroke: 'rgba(230,241,255,0.35)',
-        lineWidth: 1,
-        labelText: (d: any) => d.data?.label || d.id,
-        labelFill: '#e6f1ff',
-        labelFontSize: 11,
-        labelPlacement: 'bottom',
-        labelOffsetY: 6
-      },
-      state: {
-        selected: {
-          size: 48,
-          stroke: '#22d3ee',
-          lineWidth: 2
-        }
-      }
-    },
-    edge: {
-      style: {
-        stroke: 'rgba(120,160,230,0.45)',
-        lineWidth: 1.2,
-        endArrow: true
-      }
-    },
-    layout: {
-      type: 'd3-force',
-      link: { distance: 160 },
-      manyBody: { strength: -420 },
-      collide: { radius: 40 }
-    },
-    behaviors: ['drag-canvas', 'zoom-canvas', 'drag-element']
+  graph.on(GraphEvent.AFTER_LAYOUT, () => {
+    // 分散稳定后不再做拟合缩放（会导致整图缩太小），旋转已在 render 后启动并一直维持
+    pendingCenter = false
   })
 }
 
-async function mountGraph(data: { nodes: any[]; edges: any[] }) {
-  const el = container.value
-  if (!el) throw new Error('关系图画布未就绪')
-  const try3d = canWebGL()
-  let lastError: unknown = null
-  if (try3d) {
-    try {
-      graph = createGraph(el, data, true)
-      bindClicks(graph)
-      await graph.render()
-      graph.resize(el.clientWidth, el.clientHeight)
-      await graph.fitView()
-      renderMode.value = '3d'
-      return
-    } catch (e) {
-      lastError = e
-      graph?.destroy()
-      graph = null
-      el.querySelectorAll('canvas').forEach((c) => c.remove())
-    }
-  }
-  graph = createGraph(el, data, false)
-  bindClicks(graph)
-  await graph.render()
-  graph.resize(el.clientWidth, el.clientHeight)
-  await graph.fitView()
-  renderMode.value = '2d'
-  if (lastError) {
-    console.warn('关系分析 3D 不可用，已回退 2D', lastError)
+async function loadGraph() {
+  const data = await fetchRelationGraph()
+  if (graph && data) {
+    graph.setData({
+      nodes: data.nodes.map((n, i) => {
+        const angle = (i / Math.max(data.nodes.length, 1)) * Math.PI * 2
+        const r = 90 + (i % 5) * 18
+        return {
+          id: n.id,
+          data: { label: n.label, category: n.category },
+          style: {
+            x: canvasCx + Math.cos(angle) * r,
+            y: canvasCy + Math.sin(angle) * r,
+            z: layerZ(n.category, n.id)
+          }
+        }
+      }),
+      edges: data.edges.map((e) => ({ id: e.id, source: e.source, target: e.target, data: { label: e.label } }))
+    })
+    pendingCenter = true
+    await graph.render()
+    // 分散过程中即开始旋转，并一直维持（不等待 AFTER_LAYOUT，不在分散后做拟合缩放）
+    startAutoRotate()
   }
 }
 
+/** 复位视角：焦点回到网络中心并斜视 */
 function resetView() {
   if (selectedId) {
     graph?.setElementState(selectedId, [])
     selectedId = null
   }
   nodeDetail.value = null
-  graph?.fitView()
+  centerView()
 }
 
 onMounted(async () => {
-  loading.value = true
-  errorText.value = ''
-  empty.value = false
   await nextTick()
   const el = container.value
-  if (!el) {
-    loading.value = false
-    errorText.value = '关系图画布未找到'
-    return
-  }
-  const sized = await waitForSize(el)
-  if (!sized) {
-    loading.value = false
-    errorText.value = '关系图画布尺寸为 0，请检查页面布局后刷新'
-    return
-  }
-  try {
-    const data = await fetchRelationGraph()
-    const nodes = data?.nodes || []
-    const edges = data?.edges || []
-    if (!nodes.length) {
-      empty.value = true
-      return
+  if (!el) return
+  const size = await waitForSize(el)
+  canvasCx = size.w / 2
+  canvasCy = size.h / 2
+  initGraph(el, size.w, size.h)
+  resizeObserver = new ResizeObserver(() => {
+    if (!graph || !container.value) return
+    const w = container.value.clientWidth
+    const h = container.value.clientHeight
+    if (w >= 8 && h >= 8) {
+      canvasCx = w / 2
+      canvasCy = h / 2
+      graph.resize(w, h)
+      centerView()
     }
-    await mountGraph({ nodes, edges })
-    resizeObserver = new ResizeObserver(() => {
-      if (!graph || !container.value) return
-      const w = container.value.clientWidth
-      const h = container.value.clientHeight
-      if (w >= 8 && h >= 8) graph.resize(w, h)
-    })
-    resizeObserver.observe(el)
-  } catch (e: any) {
-    errorText.value = e?.message || '关系数据加载失败，请确认 /api/relation/graph 可访问'
-  } finally {
-    loading.value = false
+  })
+  resizeObserver.observe(el)
+  // 用户拖拽/滚轮时暂停自动旋转，松手后恢复
+  let wheelResumeTimer: ReturnType<typeof setTimeout> | undefined
+  el.addEventListener('pointerdown', () => {
+    userInteracting = true
+  })
+  const resume = () => {
+    userInteracting = false
+    lastFrameTs = 0
+  }
+  el.addEventListener('pointerup', resume)
+  el.addEventListener('pointerleave', resume)
+  el.addEventListener('wheel', () => {
+    userInteracting = true
+    clearTimeout(wheelResumeTimer)
+    wheelResumeTimer = setTimeout(resume, 1200)
+  })
+  try {
+    await loadGraph()
+  } catch {
+    /* 后端未启动时静默 */
   }
 })
 
 onBeforeUnmount(() => {
+  stopAutoRotate()
   resizeObserver?.disconnect()
   resizeObserver = null
   graph?.destroy()
@@ -303,16 +400,12 @@ onBeforeUnmount(() => {
         <span v-for="(c, k) in CATEGORY_COLOR" :key="k" class="lg">
           <i class="sw" :style="{ background: c }"></i>{{ CATEGORY_LABEL[k] }}
         </span>
-        <span class="hint">{{ renderMode === '3d' ? '🖱 按住拖拽旋转 · 滚轮缩放' : '🖱 拖拽画布 · 滚轮缩放' }}</span>
+        <span class="hint">🖱 按住拖拽旋转 · 滚轮缩放</span>
       </div>
     </header>
 
-    <div class="graph-shell">
-      <div ref="container" class="graph-canvas" />
-      <button v-if="!loading && !errorText && !empty" class="reset-btn" @click="resetView">⟲ 复位视角</button>
-      <div v-if="loading" class="graph-msg">正在加载关系网络…</div>
-      <div v-else-if="errorText" class="graph-msg is-error">{{ errorText }}</div>
-      <div v-else-if="empty" class="graph-msg">暂无关系数据</div>
+    <div ref="container" class="graph-container">
+      <button class="reset-btn" @click="resetView">⟲ 复位视角</button>
     </div>
 
     <transition name="fade">
@@ -339,7 +432,6 @@ onBeforeUnmount(() => {
   font-size: 12px;
   color: var(--text-mid);
   align-items: center;
-  flex-wrap: wrap;
 }
 .lg {
   display: inline-flex;
@@ -356,7 +448,7 @@ onBeforeUnmount(() => {
   margin-left: 8px;
   color: var(--text-low);
 }
-.graph-shell {
+.graph-container {
   flex: 1;
   min-height: 0;
   margin: 0 20px 20px;
@@ -367,28 +459,8 @@ onBeforeUnmount(() => {
   cursor: grab;
   position: relative;
 }
-.graph-shell:active {
+.graph-container:active {
   cursor: grabbing;
-}
-.graph-canvas {
-  position: absolute;
-  inset: 0;
-}
-.graph-msg {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-mid);
-  font-size: 14px;
-  z-index: 4;
-  pointer-events: none;
-}
-.graph-msg.is-error {
-  color: #fca5a5;
-  padding: 0 24px;
-  text-align: center;
 }
 .reset-btn {
   position: absolute;

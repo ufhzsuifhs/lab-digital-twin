@@ -112,8 +112,8 @@ public class StatisticsService {
         return statsMapper.ngReasonAnalysis();
     }
 
-    // ============ 九、实验结果 ============
-    public Map<String, Object> resultOkNg(String source) {
+    // ============ 九、实验结果：按库里实际结果值分组 ============
+    public List<Map<String, Object>> resultOkNg(String source) {
         return "dqa".equals(source) ? statsMapper.resultOkNgDqa() : statsMapper.resultOkNgReliability();
     }
 

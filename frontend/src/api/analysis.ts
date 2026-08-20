@@ -37,7 +37,7 @@ export const ngReason = () => http.get<any, any[]>('/analysis/abnormal/reason')
 
 // ============ 九、实验结果 ============
 export const resultOkNg = (source = 'reliability') =>
-  http.get<any, Record<string, any>>('/analysis/result/okng', { params: { source } })
+  http.get<any, any[]>('/analysis/result/okng', { params: { source } })
 export const resultDistribution = () => http.get<any, any[]>('/analysis/result/distribution')
 
 // ============ 十、DQA ============

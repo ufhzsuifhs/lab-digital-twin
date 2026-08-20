@@ -135,7 +135,7 @@ public class AnalysisController {
 
     // ============ 九、实验结果 ============
     @GetMapping("/result/okng")
-    public Result<Map<String, Object>> resultOkNg(@RequestParam(defaultValue = "reliability") String source) {
+    public Result<List<Map<String, Object>>> resultOkNg(@RequestParam(defaultValue = "reliability") String source) {
         return Result.ok(statisticsService.resultOkNg(source));
     }
 
