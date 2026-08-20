@@ -2,10 +2,11 @@ package com.lab.twin.config;
 
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.servlet.config.annotation.CorsRegistry;
+import org.springframework.web.servlet.config.annotation.ViewControllerRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
 /**
- * CORS 配置：无登录，前端大屏独立部署时跨域访问。
+ * CORS + 把 / 指到前端 index.html（静态文件放 classpath:/static）。
  */
 @Configuration
 public class WebConfig implements WebMvcConfigurer {
@@ -18,5 +19,10 @@ public class WebConfig implements WebMvcConfigurer {
                 .allowedHeaders("*")
                 .allowCredentials(true)
                 .maxAge(3600);
+    }
+
+    @Override
+    public void addViewControllers(ViewControllerRegistry registry) {
+        registry.addViewController("/").setViewName("forward:/index.html");
     }
 }

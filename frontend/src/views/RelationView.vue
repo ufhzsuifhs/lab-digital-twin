@@ -275,7 +275,6 @@ function initGraph(el: HTMLElement, width: number, height: number) {
   graph.on('click', (evt: any) => {
     const target = evt.target
     if (evt.targetType === 'node' && target?.id) {
-      // 清除上一个节点的选中状态
       if (selectedId && selectedId !== target.id) {
         graph?.setElementState(selectedId, [])
       }
@@ -286,10 +285,8 @@ function initGraph(el: HTMLElement, width: number, height: number) {
         label: target.data?.label || target.id,
         category: CATEGORY_LABEL[target.data?.category] || target.data?.category
       }
-      // 以选中节点为中心：聚焦该节点，之后旋转/缩放都围绕它
       graph?.focusElement(target.id)
     } else {
-      // 点击空白处：清除选中状态并关闭详情
       if (selectedId) {
         graph?.setElementState(selectedId, [])
         selectedId = null
@@ -356,7 +353,6 @@ onMounted(async () => {
       canvasCx = w / 2
       canvasCy = h / 2
       graph.resize(w, h)
-      centerView()
     }
   })
   resizeObserver.observe(el)

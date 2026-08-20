@@ -3,3 +3,6 @@ target/
 .idea/
 *.iml
 .vscode/
+# 前端构建产物，由 build-static.ps1 生成，不要提交
+src/main/resources/static/**
+!src/main/resources/static/.gitkeep

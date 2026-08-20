@@ -245,7 +245,6 @@ function resize() {
 onMounted(async () => {
   const el = container.value
   if (!el) return
-  // 等容器有真实尺寸再初始化，避免 setSize(0,0) 导致画面空白
   await waitForSize(el)
   try {
     initScene()
@@ -258,7 +257,6 @@ onMounted(async () => {
   window.addEventListener('resize', resize)
   renderer.domElement.addEventListener('pointermove', onPointerMove)
   renderer.domElement.addEventListener('click', onPointerClick)
-  // 容器尺寸变化时重算（flex 布局/tab 切换/窗口缩放）
   resizeObserver = new ResizeObserver(() => resize())
   resizeObserver.observe(el)
   animate()
