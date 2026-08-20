@@ -1,0 +1,3 @@
+# Git 仓库在 backend 外层。只排除配置文件，static 静态页照常提交
+backend/src/main/resources/*.yml
+backend/src/main/resources/*.yaml
